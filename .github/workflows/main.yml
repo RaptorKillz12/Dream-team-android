@@ -1,0 +1,109 @@
+
+name: Inspect Project Dream Installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+
+    steps:
+      - name: Download Project Dream release installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $projectId = "88190968"
+          $tag = "v1.0.0"
+
+          $api = "https://gitlab.com/api/v4/projects/$projectId/releases/$tag"
+
+          Write-Host "Reading GitLab release metadata..."
+          $release = Invoke-RestMethod -Uri $api
+
+          $links = @($release.assets.links)
+          $installer = $links | Where-Object {
+            $_.name -match '\.exe$' -or
+            $_.url -match '\.exe($|\?)'
+          } | Select-Object -First 1
+
+          if (-not $installer) {
+            throw "No downloadable EXE was found in the release assets."
+          }
+
+          New-Item -ItemType Directory -Force -Path tools, report | Out-Null
+
+          $uri = $installer.direct_asset_url
+          if (-not $uri) {
+            $uri = $installer.url
+          }
+
+          Write-Host "Downloading: $($installer.name)"
+          Invoke-WebRequest -Uri $uri -OutFile "tools/ProjectDream.exe"
+
+          if ((Get-Item "tools/ProjectDream.exe").Length -lt 100000) {
+            throw "Downloaded file is unexpectedly small."
+          }
+
+          Write-Host "Installer downloaded successfully."
+
+      - name: Inspect executable metadata and strings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $file = "tools/ProjectDream.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($file)
+
+          $report = @()
+          $report += "PROJECT DREAM INSTALLER INSPECTION"
+          $report += "File size: $($bytes.Length) bytes"
+          $report += ""
+
+          try {
+            $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
+              (Resolve-Path $file).Path
+            )
+
+            $report += "File version: $($version.FileVersion)"
+            $report += "Product: $($version.ProductName)"
+            $report += "Description: $($version.FileDescription)"
+          } catch {
+            $report += "Version information unavailable."
+          }
+
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $unicode = [System.Text.Encoding]::Unicode.GetString($bytes)
+          $allText = $ascii + "`n" + $unicode
+
+          $patterns = @(
+            '(?i).{0,50}(command.?line|silent|quiet|unattended).{0,80}',
+            '(?i).{0,50}(install|platform|android|browse).{0,80}',
+            '(?i).{0,50}(Inno Setup|NSIS|WiX|InstallShield).{0,80}',
+            '(?i).{0,50}(\.apk|\.obb|AndroidTools).{0,80}'
+          )
+
+          foreach ($pattern in $patterns) {
+            $matches = [regex]::Matches($allText, $pattern)
+            foreach ($match in ($matches | Select-Object -First 30)) {
+              $report += $match.Value.Trim()
+            }
+          }
+
+          $report |
+            Sort-Object -Unique |
+            Set-Content "report/installer-report.txt"
+
+          Write-Host "Inspection report created."
+
+      - name: Upload installer inspection report
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-dream-installer-report
+          path: report/installer-report.txt
+          if-no-files-found: error
+          retention-days: 7
