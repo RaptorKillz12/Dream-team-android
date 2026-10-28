@@ -1,5 +1,5 @@
 
-name: Inspect Project Dream v1.0.0
+name: Inspect Project Dream Installer
 
 on:
   workflow_dispatch:
@@ -12,49 +12,29 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Download release installer
+      - name: Download Project Dream v1.0.0
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $project = "adokova1111/project-dream-release"
-          $tag = "v1.0.0"
-          $encodedProject = [uri]::EscapeDataString($project)
-
-          $api = "https://gitlab.com/api/v4/projects/$encodedProject/releases/$tag"
-
-          Write-Host "Getting release metadata..."
-          $release = Invoke-RestMethod -Uri $api
-
-          $asset = $release.assets.links |
-            Where-Object { $_.name -eq "Project_Dream.exe" } |
-            Select-Object -First 1
-
-          if (-not $asset) {
-            Write-Host "Release assets returned by GitLab:"
-            $release.assets.links |
-              ForEach-Object { Write-Host $_.name $_.url }
-            throw "Project_Dream.exe was not found in release assets."
-          }
+          $url = "https://gitlab.com/-/project/88190968/uploads/84deea92fbba738c95ef5b863a2fe313/Project_Dream.exe"
 
           New-Item -ItemType Directory -Force -Path tools, report | Out-Null
 
-          $url = $asset.direct_asset_url
-          if (-not $url) {
-            $url = $asset.url
-          }
-
-          Write-Host "Downloading $($asset.name)..."
-          Invoke-WebRequest -Uri $url -OutFile "tools/Project_Dream.exe"
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile "tools/Project_Dream.exe"
 
           $file = Get-Item "tools/Project_Dream.exe"
+
           if ($file.Length -lt 100000) {
-            throw "Installer download is unexpectedly small."
+            throw "Downloaded file is unexpectedly small."
           }
 
-          Write-Host "Downloaded $($file.Length) bytes."
+          Write-Host "Downloaded Project_Dream.exe"
+          Write-Host "Size: $($file.Length) bytes"
 
-      - name: Inspect executable
+      - name: Inspect installer metadata
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -62,7 +42,7 @@ jobs:
           $path = (Resolve-Path "tools/Project_Dream.exe").Path
           $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
 
-          $report = @(
+          @(
             "Project Dream v1.0.0"
             "Filename: Project_Dream.exe"
             "Size: $((Get-Item $path).Length) bytes"
@@ -70,19 +50,16 @@ jobs:
             "Description: $($info.FileDescription)"
             "File version: $($info.FileVersion)"
             ""
-            "The installer has NOT been executed."
-            "No APK has been built by this inspection workflow."
-          )
+            "The installer has not been executed."
+            "This workflow does not yet build an APK."
+          ) | Set-Content "report/installer-report.txt"
 
-          $report | Set-Content "report/installer-report.txt"
-
-          Write-Host "Executable metadata:"
-          $report | ForEach-Object { Write-Host $_ }
+          Get-Content "report/installer-report.txt"
 
       - name: Upload inspection report
         uses: actions/upload-artifact@v4
         with:
-          name: project-dream-v1.0.0-inspection
+          name: project-dream-installer-report
           path: report/installer-report.txt
           if-no-files-found: error
           retention-days: 7
