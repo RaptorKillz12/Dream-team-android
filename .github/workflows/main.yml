@@ -1,5 +1,5 @@
 
-name: Inspect Project Dream Installer
+name: Inspect Project Dream v1.0.0
 
 on:
   workflow_dispatch:
@@ -12,98 +12,77 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Download Project Dream release installer
+      - name: Download release installer
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $projectId = "88190968"
+          $project = "adokova1111/project-dream-release"
           $tag = "v1.0.0"
+          $encodedProject = [uri]::EscapeDataString($project)
 
-          $api = "https://gitlab.com/api/v4/projects/$projectId/releases/$tag"
+          $api = "https://gitlab.com/api/v4/projects/$encodedProject/releases/$tag"
 
-          Write-Host "Reading GitLab release metadata..."
+          Write-Host "Getting release metadata..."
           $release = Invoke-RestMethod -Uri $api
 
-          $links = @($release.assets.links)
-          $installer = $links | Where-Object {
-            $_.name -match '\.exe$' -or
-            $_.url -match '\.exe($|\?)'
-          } | Select-Object -First 1
+          $asset = $release.assets.links |
+            Where-Object { $_.name -eq "Project_Dream.exe" } |
+            Select-Object -First 1
 
-          if (-not $installer) {
-            throw "No downloadable EXE was found in the release assets."
+          if (-not $asset) {
+            Write-Host "Release assets returned by GitLab:"
+            $release.assets.links |
+              ForEach-Object { Write-Host $_.name $_.url }
+            throw "Project_Dream.exe was not found in release assets."
           }
 
           New-Item -ItemType Directory -Force -Path tools, report | Out-Null
 
-          $uri = $installer.direct_asset_url
-          if (-not $uri) {
-            $uri = $installer.url
+          $url = $asset.direct_asset_url
+          if (-not $url) {
+            $url = $asset.url
           }
 
-          Write-Host "Downloading: $($installer.name)"
-          Invoke-WebRequest -Uri $uri -OutFile "tools/ProjectDream.exe"
+          Write-Host "Downloading $($asset.name)..."
+          Invoke-WebRequest -Uri $url -OutFile "tools/Project_Dream.exe"
 
-          if ((Get-Item "tools/ProjectDream.exe").Length -lt 100000) {
-            throw "Downloaded file is unexpectedly small."
+          $file = Get-Item "tools/Project_Dream.exe"
+          if ($file.Length -lt 100000) {
+            throw "Installer download is unexpectedly small."
           }
 
-          Write-Host "Installer downloaded successfully."
+          Write-Host "Downloaded $($file.Length) bytes."
 
-      - name: Inspect executable metadata and strings
+      - name: Inspect executable
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $file = "tools/ProjectDream.exe"
-          $bytes = [System.IO.File]::ReadAllBytes($file)
+          $path = (Resolve-Path "tools/Project_Dream.exe").Path
+          $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
 
-          $report = @()
-          $report += "PROJECT DREAM INSTALLER INSPECTION"
-          $report += "File size: $($bytes.Length) bytes"
-          $report += ""
-
-          try {
-            $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
-              (Resolve-Path $file).Path
-            )
-
-            $report += "File version: $($version.FileVersion)"
-            $report += "Product: $($version.ProductName)"
-            $report += "Description: $($version.FileDescription)"
-          } catch {
-            $report += "Version information unavailable."
-          }
-
-          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
-          $unicode = [System.Text.Encoding]::Unicode.GetString($bytes)
-          $allText = $ascii + "`n" + $unicode
-
-          $patterns = @(
-            '(?i).{0,50}(command.?line|silent|quiet|unattended).{0,80}',
-            '(?i).{0,50}(install|platform|android|browse).{0,80}',
-            '(?i).{0,50}(Inno Setup|NSIS|WiX|InstallShield).{0,80}',
-            '(?i).{0,50}(\.apk|\.obb|AndroidTools).{0,80}'
+          $report = @(
+            "Project Dream v1.0.0"
+            "Filename: Project_Dream.exe"
+            "Size: $((Get-Item $path).Length) bytes"
+            "Product: $($info.ProductName)"
+            "Description: $($info.FileDescription)"
+            "File version: $($info.FileVersion)"
+            ""
+            "The installer has NOT been executed."
+            "No APK has been built by this inspection workflow."
           )
 
-          foreach ($pattern in $patterns) {
-            $matches = [regex]::Matches($allText, $pattern)
-            foreach ($match in ($matches | Select-Object -First 30)) {
-              $report += $match.Value.Trim()
-            }
-          }
+          $report | Set-Content "report/installer-report.txt"
 
-          $report |
-            Sort-Object -Unique |
-            Set-Content "report/installer-report.txt"
+          Write-Host "Executable metadata:"
+          $report | ForEach-Object { Write-Host $_ }
 
-          Write-Host "Inspection report created."
-
-      - name: Upload installer inspection report
+      - name: Upload inspection report
         uses: actions/upload-artifact@v4
         with:
-          name: project-dream-installer-report
+          name: project-dream-v1.0.0-inspection
           path: report/installer-report.txt
           if-no-files-found: error
           retention-days: 7
