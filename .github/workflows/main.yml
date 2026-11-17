@@ -13,7 +13,7 @@ on:
       installer_url:
         description: Project Dream installer
         required: true
-        default: 'https://github.com/RaptorKillz12/Project-Dream-Release/releases/download/V1.0.0/Project_Dream_v1.0.0.exe'
+        default: 'https://github.com/RaptorKillz12/Project-Dream-Release/releases/download/V1.0.0/Project_Dream.exe'
 
 permissions:
   contents: write
