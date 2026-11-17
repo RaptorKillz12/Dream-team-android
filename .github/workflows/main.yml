@@ -491,107 +491,142 @@ jobs:
 
           py run_installer.py
 
-      - name: Collect Project Dream APK only
+      - name: Collect Project Dream Android files
         if: always()
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force output/android | Out-Null
 
-          $roots = @("$env:GITHUB_WORKSPACE", "$env:USERPROFILE")
-          $found = foreach ($root in $roots) {
-            Get-ChildItem $root -Recurse -File -Filter "ProjectDream.apk" -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -notlike "$env:GITHUB_WORKSPACE\output\*" }
+          # The installer's README specifies these exact output filenames.
+          $wanted = @(
+            "SonicDreamTeam.apk",
+            "main.1.com.sonicdreamteam.android.obb"
+          )
+          $roots = @($env:GITHUB_WORKSPACE, $env:USERPROFILE) | Select-Object -Unique
+
+          foreach ($name in $wanted) {
+            $matches = foreach ($root in $roots) {
+              if (Test-Path $root) {
+                Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+                  Where-Object {
+                    $_.Name -ieq $name -and
+                    $_.FullName -notlike "$env:GITHUB_WORKSPACE\output\*" -and
+                    $_.FullName -notlike "$env:GITHUB_WORKSPACE\release-assets\*"
+                  }
+              }
+            }
+
+            $file = $matches | Sort-Object Length -Descending | Select-Object -First 1
+            if ($file) {
+              Copy-Item -LiteralPath $file.FullName -Destination (Join-Path "output/android" $name) -Force
+              Write-Host ("Collected {0}: {1:N2} GB" -f $name, ($file.Length / 1GB))
+              Get-FileHash (Join-Path "output/android" $name) -Algorithm SHA256
+            } else {
+              Write-Host "$name was not found."
+            }
           }
 
-          $apk = $found | Sort-Object Length -Descending | Select-Object -First 1
-          if (-not $apk) {
-            Write-Host "ProjectDream.apk was not found."
-            exit 0
-          }
-
-          Copy-Item $apk.FullName "output/android/ProjectDream.apk" -Force
-          Write-Host ("Collected ProjectDream.apk: {0:N2} GB" -f ($apk.Length / 1GB))
-          Get-FileHash "output/android/ProjectDream.apk" -Algorithm SHA256
-
-      - name: Validate Project Dream APK
-        if: success()
-        shell: pwsh
-        run: |
-          $apk = "output/android/ProjectDream.apk"
-          if (-not (Test-Path $apk)) {
-            throw "ProjectDream.apk was not generated. Nothing will be published."
-          }
-          $item = Get-Item $apk
-          if ($item.Length -lt 1MB) {
-            throw "ProjectDream.apk is unexpectedly small ($($item.Length) bytes)."
-          }
-          Get-FileHash $apk -Algorithm SHA256
-
-      - name: Prepare release APK assets
+      - name: Validate Project Dream Android files
         if: success()
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $apk = "output/android/ProjectDream.apk"
+          $apk = "output/android/SonicDreamTeam.apk"
+          $obb = "output/android/main.1.com.sonicdreamteam.android.obb"
+
+          if (-not (Test-Path $apk)) {
+            throw "SonicDreamTeam.apk was not generated. The installer README specifies this exact filename."
+          }
+          if ((Get-Item $apk).Length -lt 1MB) {
+            throw "SonicDreamTeam.apk is unexpectedly small."
+          }
+          if (-not (Test-Path $obb)) {
+            throw "The required Android OBB was not generated: main.1.com.sonicdreamteam.android.obb"
+          }
+          if ((Get-Item $obb).Length -lt 1MB) {
+            throw "The Android OBB is unexpectedly small."
+          }
+
+          foreach ($file in @($apk, $obb)) {
+            Write-Host ("Validated {0}: {1:N2} GB" -f $file, ((Get-Item $file).Length / 1GB))
+            Get-FileHash $file -Algorithm SHA256
+          }
+
+      - name: Prepare Project Dream Android release assets
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           $assets = "release-assets"
           New-Item -ItemType Directory -Force $assets | Out-Null
 
           # GitHub Releases limits each individual asset to 2 GiB.
-          # Keep each APK segment below that limit, then reassemble the APK.
+          # Split both files into numbered parts smaller than that limit.
           $maxPartBytes = 1800MB
-          $input = [System.IO.File]::OpenRead($apk)
-          try {
-            $buffer = New-Object byte[] (8MB)
-            $part = 0
-            while ($input.Position -lt $input.Length) {
-              $part++
-              $name = Join-Path $assets ("ProjectDream.apk.part{0:D3}" -f $part)
-              $output = [System.IO.File]::Create($name)
-              try {
-                $remaining = [Math]::Min([int64]$maxPartBytes, $input.Length - $input.Position)
-                while ($remaining -gt 0) {
-                  $read = $input.Read($buffer, 0, [int][Math]::Min($buffer.Length, $remaining))
-                  if ($read -le 0) { throw "Unexpected end of APK while splitting." }
-                  $output.Write($buffer, 0, $read)
-                  $remaining -= $read
+          foreach ($source in @(
+            "output/android/SonicDreamTeam.apk",
+            "output/android/main.1.com.sonicdreamteam.android.obb"
+          )) {
+            $input = [System.IO.File]::OpenRead($source)
+            try {
+              $buffer = New-Object byte[] (8MB)
+              $part = 0
+              while ($input.Position -lt $input.Length) {
+                $part++
+                $name = Join-Path $assets ("{0}.part{1:D3}" -f (Split-Path $source -Leaf), $part)
+                $output = [System.IO.File]::Create($name)
+                try {
+                  $remaining = [Math]::Min([int64]$maxPartBytes, $input.Length - $input.Position)
+                  while ($remaining -gt 0) {
+                    $read = $input.Read($buffer, 0, [int][Math]::Min($buffer.Length, $remaining))
+                    if ($read -le 0) { throw "Unexpected end of file while splitting $source." }
+                    $output.Write($buffer, 0, $read)
+                    $remaining -= $read
+                  }
+                } finally {
+                  $output.Dispose()
                 }
-              } finally {
-                $output.Dispose()
+                Write-Host "Created $name"
               }
-              Write-Host "Created $name"
+            } finally {
+              $input.Dispose()
             }
-          } finally {
-            $input.Dispose()
           }
 
-          $parts = Get-ChildItem $assets -File
-          if (-not $parts) { throw "No release APK parts were created." }
-          $parts | ForEach-Object { Write-Host ("{0}: {1:N2} MB" -f $_.Name, ($_.Length / 1MB)) }
+          Get-ChildItem $assets -File | ForEach-Object {
+            Write-Host ("{0}: {1:N2} MB" -f $_.Name, ($_.Length / 1MB))
+          }
 
-      - name: Publish Project Dream APK to GitHub Releases
+      - name: Publish Project Dream Android files to GitHub Releases
         if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: projectdream-android-${{ github.run_id }}-${{ github.run_attempt }}
-          name: Project Dream Android APK
+          name: Project Dream Android APK and OBB
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
-          files: release-assets/ProjectDream.apk.part*
+          files: |
+            release-assets/SonicDreamTeam.apk.part*
+            release-assets/main.1.com.sonicdreamteam.android.obb.part*
           body: |
-            Project Dream Android APK, split into numbered parts because GitHub Releases limits individual assets to 2 GiB.
+            Project Dream Android output.
 
-            Download every `ProjectDream.apk.partNNN` asset into the same folder, then run this PowerShell command in that folder to rebuild `ProjectDream.apk`:
+            This release contains both required files, split into numbered parts when needed because GitHub Releases limits individual assets to 2 GiB.
+
+            Download every part for each file into the same folder. Reassemble the APK and OBB separately, in ascending part-number order, using PowerShell:
 
             ```powershell
-            $out = [System.IO.File]::Create("ProjectDream.apk")
-            try {
-              Get-ChildItem "ProjectDream.apk.part*" | Sort-Object Name | ForEach-Object {
-                $input = [System.IO.File]::OpenRead($_.FullName)
-                try { $input.CopyTo($out) } finally { $input.Dispose() }
-              }
-            } finally { $out.Dispose() }
+            foreach ($base in @("SonicDreamTeam.apk", "main.1.com.sonicdreamteam.android.obb")) {
+              $out = [System.IO.File]::Create($base)
+              try {
+                Get-ChildItem "$base.part*" | Sort-Object Name | ForEach-Object {
+                  $input = [System.IO.File]::OpenRead($_.FullName)
+                  try { $input.CopyTo($out) } finally { $input.Dispose() }
+                }
+              } finally { $out.Dispose() }
+            }
             ```
 
-            Only the APK data is attached to this release; no build diagnostics or other application packages are uploaded.
+            Install SonicDreamTeam.apk, then place main.1.com.sonicdreamteam.android.obb in Android/obb/com.sonicdreamteam.android/.
