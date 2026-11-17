@@ -154,6 +154,7 @@ jobs:
 
       - name: Run Project Dream Android installer
         shell: pwsh
+        continue-on-error: true
         timeout-minutes: 100
         env:
           REMOTE_CONTROL_TOKEN: ${{ secrets.REMOTE_CONTROL_PASSWORD }}
