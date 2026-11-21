@@ -135,32 +135,28 @@ jobs:
 
       - name: Prepare secure browser tunnel
         shell: pwsh
-        env:
-          REMOTE_CONTROL_PASSWORD: ${{ secrets.REMOTE_CONTROL_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          if ([string]::IsNullOrWhiteSpace(
-            $env:REMOTE_CONTROL_PASSWORD
-          )) {
-            throw "Configure REMOTE_CONTROL_PASSWORD in repository secrets."
-          }
 
           Invoke-WebRequest `
             -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
             -OutFile "$env:RUNNER_TEMP\cloudflared.exe"
 
-      - name: Run Project Dream Android installer
+      - name: Start tunnel and publish installer link
         shell: pwsh
-        continue-on-error: true
-        timeout-minutes: 100
         env:
-          REMOTE_CONTROL_TOKEN: ${{ secrets.REMOTE_CONTROL_PASSWORD }}
+          REMOTE_CONTROL_PASSWORD: ${{ secrets.REMOTE_CONTROL_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
 
+          if ([string]::IsNullOrWhiteSpace($env:REMOTE_CONTROL_PASSWORD)) {
+            throw "Configure REMOTE_CONTROL_PASSWORD in repository secrets."
+          }
+
           $outLog = "$env:RUNNER_TEMP\cloudflared-out.log"
           $errLog = "$env:RUNNER_TEMP\cloudflared-err.log"
+
+          Remove-Item $outLog, $errLog -Force -ErrorAction SilentlyContinue
 
           $cloudflared = Start-Process `
             -FilePath "$env:RUNNER_TEMP\cloudflared.exe" `
@@ -175,16 +171,16 @@ jobs:
 
           $tunnel = $null
 
-          for ($i = 0; $i -lt 60; $i++) {
+          for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep 2
 
+            if ($cloudflared.HasExited) {
+              throw "cloudflared exited before creating a tunnel. Check cloudflared logs."
+            }
+
             $logs = ""
-            if (Test-Path $outLog) {
-              $logs += Get-Content $outLog -Raw
-            }
-            if (Test-Path $errLog) {
-              $logs += Get-Content $errLog -Raw
-            }
+            if (Test-Path $outLog) { $logs += Get-Content $outLog -Raw }
+            if (Test-Path $errLog) { $logs += Get-Content $errLog -Raw }
 
             if ($logs -match 'https://[a-z0-9-]+\.trycloudflare\.com') {
               $tunnel = $Matches[0]
@@ -193,16 +189,35 @@ jobs:
           }
 
           if (-not $tunnel) {
-            throw "Cloudflare tunnel failed to start."
+            if (Test-Path $outLog) { Get-Content $outLog }
+            if (Test-Path $errLog) { Get-Content $errLog }
+            throw "Cloudflare tunnel URL was not created."
           }
+
+          "DREAM_TUNNEL_URL=$tunnel" | Out-File $env:GITHUB_ENV -Append
 
           @"
           ## Project Dream Remote Installer
 
-          [Open Project Dream installer control]($tunnel/)
+          **[Open Project Dream Installer Control]($tunnel/)**
 
-          Temporary private installer control.
+          Login username: `installer`
+          Login password: the value stored in the `REMOTE_CONTROL_PASSWORD` repository secret.
+
+          The control page becomes available after the installer automation starts its local server.
           "@ | Out-File $env:GITHUB_STEP_SUMMARY -Append
+
+          Write-Host "Tunnel is ready: $tunnel"
+          Write-Host "Installer access link published to the Actions summary."
+
+      - name: Run Project Dream Android installer
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 100
+        env:
+          REMOTE_CONTROL_TOKEN: ${{ secrets.REMOTE_CONTROL_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
 
           @'
           import os
