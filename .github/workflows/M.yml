@@ -1,0 +1,79 @@
+name: Run Project_Dream.exe via Windows RDP (Cloudflare Tunnel)
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_data_url:
+        description: 'Direct URL or Google Drive share link to your Sonic Dream Team macOS .zip'
+        required: true
+        type: string
+
+jobs:
+  run-with-cf-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Setup Workspace and Tools
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\ProjectDream\gamedata"
+          python -m pip install --quiet gdown
+          Invoke-WebRequest -Uri "https://github.com" -OutFile "C:\ProjectDream\cloudflared.exe"
+
+      - name: Download Project_Dream.exe from Google Drive
+        shell: pwsh
+        run: |
+          gdown --id "1s3ocn8AC07_RJQHmraeZWJP_vddSspEn" -O "C:\ProjectDream\Project_Dream.exe"
+
+      - name: Download and Extract Game Data
+        shell: pwsh
+        run: |
+          $url = "${{ github.event.inputs.game_data_url }}"
+          $zipPath = "C:\ProjectDream\gamedata.zip"
+
+          if ($url -match "drive\.google\.com") {
+            gdown --fuzzy "$url" -O $zipPath
+          } else {
+            Invoke-WebRequest -Uri $url -OutFile $zipPath
+          }
+
+          Expand-Archive -Path $zipPath -DestinationPath "C:\ProjectDream\gamedata" -Force
+
+      - name: Enable Windows RDP
+        shell: pwsh
+        run: |
+          net user runneradmin "${{ secrets.RDP_PASSWORD }}"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      - name: Start Cloudflare Quick Tunnel and Launch Project_Dream.exe
+        shell: pwsh
+        run: |
+          # Start cloudflared TCP tunnel pointing to local RDP port 3389
+          Start-Process -FilePath "C:\ProjectDream\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389 --logfile C:\ProjectDream\cf.log" -NoNewWindow
+
+          # Wait for the temporary trycloudflare.com URL to generate
+          $tunnelHost = $null
+          for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 2
+            if (Test-Path "C:\ProjectDream\cf.log") {
+              $match = Select-String -Path "C:\ProjectDream\cf.log" -Pattern "https://([a-zA-Z0-9-]+\.trycloudflare\.com)"
+              if ($match) {
+                $tunnelHost = $match.Matches[0].Groups[1].Value
+                break
+              }
+            }
+          }
+
+          Write-Output "=========================================================="
+          Write-Output "Cloudflare Tunnel Host : $tunnelHost"
+          Write-Output "RDP Username           : runneradmin"
+          Write-Output "Files Location         : C:\ProjectDream"
+          Write-Output "=========================================================="
+
+          # Launch Project_Dream.exe
+          Start-Process -FilePath "C:\ProjectDream\Project_Dream.exe" -WorkingDirectory "C:\ProjectDream"
+
+          # Keep session alive for 45 minutes
+          Start-Sleep -Seconds 2700
