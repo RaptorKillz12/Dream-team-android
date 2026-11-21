@@ -20,8 +20,8 @@ jobs:
       - name: Prepare persistent files folder
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "C:\\PC-Persistence" | Out-Null
-          "Put files you want to keep in C:\\PC-Persistence." | Set-Content "C:\\PC-Persistence\\README.txt"
+          New-Item -ItemType Directory -Force -Path "C:\PC-Persistence" | Out-Null
+          "Put files you want to keep in C:\PC-Persistence." | Set-Content "C:\PC-Persistence\\README.txt"
 
       - name: Download and install RustDesk
         shell: pwsh
@@ -33,7 +33,7 @@ jobs:
           }
 
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/rustdesk/rustdesk/releases/latest" -Headers @{ "User-Agent" = "GitHub-Actions-RustDesk" }
-          $asset = $release.assets | Where-Object { $_.name -match "x86_64.*\\.exe$" -or $_.name -match "x64.*\\.exe$" } | Select-Object -First 1
+          $asset = $release.assets | Where-Object { $_.name -match "x86_64.*\.exe$" -or $_.name -match "x64.*\.exe$" } | Select-Object -First 1
           if (-not $asset) {
             throw "Could not find the Windows x64 RustDesk installer in the latest release."
           }
@@ -42,9 +42,9 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
           Start-Process -FilePath $installer -ArgumentList "--silent-install" -Wait
 
-          $exe = "C:\\Program Files\\RustDesk\\rustdesk.exe"
+          $exe = "C:\Program Files\\RustDesk\\rustdesk.exe"
           if (-not (Test-Path $exe)) {
-            $exe = "C:\\Program Files (x86)\\RustDesk\\rustdesk.exe"
+            $exe = "C:\Program Files (x86)\\RustDesk\\rustdesk.exe"
           }
           if (-not (Test-Path $exe)) {
             throw "RustDesk installed, but rustdesk.exe was not found in the expected install folders."
@@ -73,7 +73,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "The hosted Windows runner is temporary and will shut down when this job ends."
-          Write-Host "Save anything you want to keep under C:\\PC-Persistence."
+          Write-Host "Save anything you want to keep under C:\PC-Persistence."
           Start-Sleep -Seconds 20700
 
       - name: Upload saved files as an artifact
@@ -81,6 +81,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-pc-files
-          path: C:\\PC-Persistence
+          path: C:\PC-Persistence
           if-no-files-found: warn
           retention-days: 30
