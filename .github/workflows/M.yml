@@ -24,7 +24,8 @@ jobs:
       - name: Download Project_Dream.exe from Google Drive
         shell: pwsh
         run: |
-          gdown --id "1s3ocn8AC07_RJQHmraeZWJP_vddSspEn" -O "C:\ProjectDream\Project_Dream.exe"
+          gdown  "https://google.com" -O "C:\ProjectDream\Project_Dream.exe"
+
 
       - name: Download and Extract Game Data
         shell: pwsh
