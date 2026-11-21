@@ -615,16 +615,14 @@ jobs:
       # COLLECT APK AND OBB FILES
       # -------------------------------------------------
 
-      - name: Collect Project Dream Android files
+      - name: Collect Project Dream Android APK
         if: always()
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
 
           $destination = "output/android"
-
-          New-Item -ItemType Directory -Force `
-            $destination | Out-Null
+          New-Item -ItemType Directory -Force $destination | Out-Null
 
           if (-not $env:DREAM_ANDROID_FOLDER) {
             Write-Host "No Project Dream Android folder was detected."
@@ -632,101 +630,35 @@ jobs:
           }
 
           $source = $env:DREAM_ANDROID_FOLDER
+          Write-Host "Searching installer output for APK: $source"
 
-          Write-Host "Collecting from: $source"
-
-          # Save the complete installer output, preserving structure.
-          $complete = Join-Path $destination "Project Dream Android"
-
-          New-Item -ItemType Directory -Force `
-            $complete | Out-Null
-
-          Copy-Item -LiteralPath "$source\*" `
-            -Destination $complete `
-            -Recurse -Force `
-            -ErrorAction Continue
-
-          # Find all APK files.
           $apks = Get-ChildItem `
             -LiteralPath $source `
             -Recurse -Force -File `
             -Filter "*.apk" `
             -ErrorAction SilentlyContinue
 
-          # Find all OBB files, including hidden files.
-          $obbs = Get-ChildItem `
-            -LiteralPath $source `
-            -Recurse -Force -File `
-            -Filter "*.obb" `
-            -ErrorAction SilentlyContinue
-
           Write-Host "APK files found: $($apks.Count)"
-          Write-Host "OBB files found: $($obbs.Count)"
 
-          $index = 0
-
-          foreach ($file in $apks) {
-            $index++
-
-            Write-Host "APK: $($file.FullName)"
-            Write-Host "Size: $([math]::Round($file.Length / 1MB, 2)) MB"
-
-            if ($index -eq 1) {
-              Copy-Item $file.FullName `
-                "$destination/ProjectDream.apk" -Force
-            }
+          if ($apks.Count -eq 0) {
+            Write-Host "No APK was found in the installer output."
+            exit 0
           }
 
-          foreach ($file in $obbs) {
-            Write-Host "================================="
-            Write-Host "OBB: $($file.Name)"
-            Write-Host "Path: $($file.FullName)"
-            Write-Host "Size: $([math]::Round($file.Length / 1MB, 2)) MB"
-            Write-Host "Hidden: $($file.Attributes -match 'Hidden')"
+          $selectedApk = $apks |
+            Sort-Object Length -Descending |
+            Select-Object -First 1
 
-            Get-FileHash $file.FullName -Algorithm SHA256
-          }
+          Copy-Item -LiteralPath $selectedApk.FullName `
+            -Destination "$destination/ProjectDream.apk" -Force
 
-          # Save a CSV inventory.
-          @($apks) + @($obbs) |
+          Write-Host "Selected APK: $($selectedApk.FullName)"
+          Write-Host "Output: $destination/ProjectDream.apk"
+          Write-Host "Size: $([math]::Round($selectedApk.Length / 1MB, 2)) MB"
+
+          $apks |
             Select-Object FullName, Name, Length, Attributes |
-            Export-Csv "diagnostics/android-files.csv" `
-              -NoTypeInformation
-
-      # -------------------------------------------------
-      # CREATE COMPLETE ANDROID DATA ARCHIVE
-      # -------------------------------------------------
-
-      - name: Archive Project Dream Android folder
-        if: always()
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-
-          $source = "output/android/Project Dream Android"
-
-          if (-not (Test-Path $source)) {
-            Write-Host "No Android folder to archive."
-            exit 0
-          }
-
-          $files = Get-ChildItem $source -Recurse -Force -File
-
-          if ($files.Count -eq 0) {
-            Write-Host "Android folder is empty."
-            exit 0
-          }
-
-          Compress-Archive `
-            -Path "$source\*" `
-            -DestinationPath "output/Project-Dream-Android-Data.zip" `
-            -CompressionLevel NoCompression `
-            -Force
-
-          Write-Host "Created Android data archive."
-
-          Get-Item "output/Project-Dream-Android-Data.zip" |
-            Select-Object Name, Length
+            Export-Csv "diagnostics/android-apks.csv" -NoTypeInformation
 
       # -------------------------------------------------
       # DIAGNOSTICS
@@ -775,7 +707,7 @@ jobs:
       # PREPARE RELEASE
       # -------------------------------------------------
 
-      - name: Prepare Android release assets
+      - name: Prepare APK release asset
         if: always()
         shell: pwsh
         run: |
@@ -784,83 +716,18 @@ jobs:
           New-Item -ItemType Directory -Force `
             release-assets | Out-Null
 
-          $files = @()
+          $apk = "output/android/ProjectDream.apk"
 
-          if (Test-Path "output/android/ProjectDream.apk") {
-            $files += Get-Item "output/android/ProjectDream.apk"
+          if (-not (Test-Path $apk)) {
+            throw "ProjectDream.apk was not generated. Check the installer and APK collection logs."
           }
 
-          if (Test-Path "output/Project-Dream-Android-Data.zip") {
-            $files += Get-Item "output/Project-Dream-Android-Data.zip"
-          }
+          Copy-Item -LiteralPath $apk `
+            -Destination "release-assets/ProjectDream.apk" -Force
 
-          if ($files.Count -eq 0) {
-            throw "No Android release files were generated."
-          }
-
-          $maxPartBytes = 1800MB
-
-          foreach ($file in $files) {
-            $input = [IO.File]::OpenRead($file.FullName)
-
-            try {
-              $buffer = New-Object byte[] (8MB)
-              $part = 0
-
-              while ($input.Position -lt $input.Length) {
-                $part++
-
-                if ($input.Length -le $maxPartBytes) {
-                  $name = Join-Path "release-assets" $file.Name
-                }
-                else {
-                  $name = Join-Path "release-assets" (
-                    "{0}.part{1:D3}" -f $file.Name, $part
-                  )
-                }
-
-                $output = [IO.File]::Create($name)
-
-                try {
-                  $remaining = [Math]::Min(
-                    [int64]$maxPartBytes,
-                    $input.Length - $input.Position
-                  )
-
-                  while ($remaining -gt 0) {
-                    $read = $input.Read(
-                      $buffer, 0,
-                      [int][Math]::Min($buffer.Length, $remaining)
-                    )
-
-                    if ($read -le 0) {
-                      throw "Unexpected end of file."
-                    }
-
-                    $output.Write($buffer, 0, $read)
-                    $remaining -= $read
-                  }
-                }
-                finally {
-                  $output.Dispose()
-                }
-
-                Write-Host "Created $name"
-              }
-            }
-            finally {
-              $input.Dispose()
-            }
-          }
-
-          Get-ChildItem release-assets -File |
-            ForEach-Object {
-              Write-Host "$($_.Name): $([math]::Round($_.Length / 1MB, 2)) MB"
-            }
-
-      # -------------------------------------------------
-      # PUBLISH GITHUB RELEASE
-      # -------------------------------------------------
+          $file = Get-Item "release-assets/ProjectDream.apk"
+          Write-Host "Ready to publish APK only:"
+          Write-Host "$($file.Name): $([math]::Round($file.Length / 1MB, 2)) MB"
 
       - name: Publish Project Dream Android Release
         if: success()
@@ -876,38 +743,13 @@ jobs:
           body: |
             # Project Dream Android
 
-            Sonic Dream Team Android output generated using Project Dream.
+            Sonic Dream Team Android APK generated using Project Dream.
 
-            ## Included files
+            ## Included file
 
-            - ProjectDream.apk (when generated)
-            - Project-Dream-Android-Data.zip (complete installer output, including OBB files)
+            - ProjectDream.apk
 
-            The ZIP preserves the Project Dream Android folder structure.
-
-            ## Split archives
-
-            Files exceeding the release asset size threshold are split into numbered parts.
-
-            Download all parts into the same folder.
-
-            Reassemble split files in ascending order using PowerShell:
-
-            ```powershell
-            $out = [System.IO.File]::Create("Project-Dream-Android-Data.zip")
-
-            try {
-              Get-ChildItem "Project-Dream-Android-Data.zip.part*" |
-                Sort-Object Name |
-                ForEach-Object {
-                  $input = [System.IO.File]::OpenRead($_.FullName)
-                  try {
-                    $input.CopyTo($out)
-                  }
-                  finally {
-                    $input.Dispose()
-                  }
-                }
+            This build uses APK-only packaging. No OBB or separate game-data archive is expected.
             }
             finally {
               $out.Dispose()
