@@ -1,0 +1,86 @@
+name: RustDesk Windows PC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rustdesk-windows-pc
+  cancel-in-progress: false
+
+jobs:
+  windows-pc:
+    name: Start Windows desktop
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Prepare persistent files folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\\PC-Persistence" | Out-Null
+          "Put files you want to keep in C:\\PC-Persistence." | Set-Content "C:\\PC-Persistence\\README.txt"
+
+      - name: Download and install RustDesk
+        shell: pwsh
+        env:
+          RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RUSTDESK_PASSWORD)) {
+            throw "Repository secret RUSTDESK_PASSWORD is missing."
+          }
+
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/rustdesk/rustdesk/releases/latest" -Headers @{ "User-Agent" = "GitHub-Actions-RustDesk" }
+          $asset = $release.assets | Where-Object { $_.name -match "x86_64.*\\.exe$" -or $_.name -match "x64.*\\.exe$" } | Select-Object -First 1
+          if (-not $asset) {
+            throw "Could not find the Windows x64 RustDesk installer in the latest release."
+          }
+
+          $installer = Join-Path $env:RUNNER_TEMP $asset.name
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "--silent-install" -Wait
+
+          $exe = "C:\\Program Files\\RustDesk\\rustdesk.exe"
+          if (-not (Test-Path $exe)) {
+            $exe = "C:\\Program Files (x86)\\RustDesk\\rustdesk.exe"
+          }
+          if (-not (Test-Path $exe)) {
+            throw "RustDesk installed, but rustdesk.exe was not found in the expected install folders."
+          }
+
+          & $exe --password $env:RUSTDESK_PASSWORD
+          Start-Sleep -Seconds 5
+
+          $service = Get-Service -Name "RustDesk" -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne "Running") {
+            Start-Service -Name "RustDesk"
+          }
+
+          Start-Process -FilePath $exe
+          Start-Sleep -Seconds 10
+
+          $idOutput = (& $exe --get-id 2>&1 | Out-String).Trim()
+          if ([string]::IsNullOrWhiteSpace($idOutput)) {
+            throw "RustDesk did not return an ID. Check the workflow logs."
+          }
+          "RUSTDESK_ID=$idOutput" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "RustDesk ID: $idOutput"
+          Write-Host "Connect from your tablet using this ID and the password stored in the repository secret."
+
+      - name: Keep desktop available
+        shell: pwsh
+        run: |
+          Write-Host "The hosted Windows runner is temporary and will shut down when this job ends."
+          Write-Host "Save anything you want to keep under C:\\PC-Persistence."
+          Start-Sleep -Seconds 20700
+
+      - name: Upload saved files as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pc-files
+          path: C:\\PC-Persistence
+          if-no-files-found: warn
+          retention-days: 30
